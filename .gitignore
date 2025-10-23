@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+.venv/
+venv/
+
+# dotenv
+.env
+
+# Data and model artifacts (optional - keep if you don't want to commit model files)
+data/
+model/
+
+# IDE
+.vscode/
