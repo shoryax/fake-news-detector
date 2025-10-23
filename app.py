@@ -28,8 +28,9 @@ def preprocess_text(text):
     if not text:
         return ""
     text = str(text).lower()
-    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
-    text = ' '.join(text.split())
+    # Keep alphanumeric characters and basic punctuation
+    text = re.sub(r'[^a-zA-Z0-9\s.,\'-]', '', text)
+    # Remove stopwords but keep numbers
     text = ' '.join([word for word in text.split() if word not in stop_words])
     return text
 
