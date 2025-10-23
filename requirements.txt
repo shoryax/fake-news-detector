@@ -6,3 +6,6 @@ gunicorn==21.2.0
 # Pinned numeric/scientific libs to match local environment and available manylinux wheels
 numpy==1.26.4
 scipy==1.16.2
+
+# HTTP client used by smoke test
+requests==2.31.0

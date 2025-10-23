@@ -1,24 +1,34 @@
 from flask import Flask, request, jsonify, render_template
 import pickle
 import re
+import os
+import tempfile
+import urllib.request
+import urllib.error
+import threading
 import nltk
 from nltk.corpus import stopwords
-import os
 
-# Download NLTK if needed (quiet)
-nltk.download('stopwords', quiet=True)
+# If this repo bundles NLTK data (nltk_data/), make sure NLTK finds it.
+HERE = os.path.dirname(__file__)
+NLTK_DATA_DIR = os.path.join(HERE, 'nltk_data')
+if os.path.isdir(NLTK_DATA_DIR):
+    import nltk.data
+    nltk.data.path.append(NLTK_DATA_DIR)
 
 app = Flask(__name__)
 
+# Paths inside the deployment (relative to project root)
 MODEL_PATH = 'model/logistic_model.pkl'
 VECTORIZER_PATH = 'model/tfidf_vectorizer.pkl'
 
 # lazy-loaded model/vectorizer (helps serverless deployments)
 model = None
 vectorizer = None
-_model_lock = None
+_model_lock = threading.Lock()
 
-stop_words = set(stopwords.words('english'))
+# stop_words is initialized lazily in _ensure_resources()
+stop_words = None
 
 
 def _ensure_model_loaded():
@@ -26,17 +36,90 @@ def _ensure_model_loaded():
     global model, vectorizer, _model_lock
     if model is not None and vectorizer is not None:
         return
-    import threading
-    if _model_lock is None:
-        _model_lock = threading.Lock()
+
+    # Ensure NLTK resources and make best-effort to fetch missing model files
+    _ensure_resources()
+
     with _model_lock:
         if model is None or vectorizer is None:
-            if not os.path.exists(MODEL_PATH) or not os.path.exists(VECTORIZER_PATH):
-                raise FileNotFoundError("Run preprocess.py first to generate models!")
-            with open(VECTORIZER_PATH, 'rb') as f:
-                vectorizer = pickle.load(f)
-            with open(MODEL_PATH, 'rb') as f:
-                model = pickle.load(f)
+            # If local pickles are missing, try to download from URLs provided via env vars.
+            if not os.path.exists(VECTORIZER_PATH) or not os.path.exists(MODEL_PATH):
+                vec_url = os.environ.get('VECTORIZER_URL') or os.environ.get('VEC_URL') or os.environ.get('VECTORIZER')
+                model_url = os.environ.get('MODEL_URL') or os.environ.get('MODEL')
+                if vec_url and model_url:
+                    os.makedirs(os.path.dirname(VECTORIZER_PATH), exist_ok=True)
+                    try:
+                        _download_file(vec_url, VECTORIZER_PATH)
+                        _download_file(model_url, MODEL_PATH)
+                    except Exception as e:
+                        raise RuntimeError(f"Failed to download model artifacts: {e}")
+                else:
+                    raise FileNotFoundError("Model files not found. Provide MODEL_URL and VECTORIZER_URL environment variables or include model pickles in the deployment.")
+
+            # Load the pickles
+            try:
+                with open(VECTORIZER_PATH, 'rb') as f:
+                    vectorizer = pickle.load(f)
+            except Exception as e:
+                raise RuntimeError(f"Failed to load vectorizer pickle: {e}")
+            try:
+                with open(MODEL_PATH, 'rb') as f:
+                    model = pickle.load(f)
+            except Exception as e:
+                raise RuntimeError(f"Failed to load model pickle: {e}")
+
+
+def _download_file(url, dest_path, timeout=20):
+    """Download a file from `url` to `dest_path` (atomic write).
+
+    Uses urllib.request (safe in restricted environments). Raises on non-200.
+    """
+    # Write to a temporary file first
+    dest_dir = os.path.dirname(dest_path)
+    os.makedirs(dest_dir, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=dest_dir)
+    os.close(fd)
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'python-urllib/3'})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"Download failed with status {resp.status} for {url}")
+            data = resp.read()
+        with open(tmp_path, 'wb') as out:
+            out.write(data)
+        os.replace(tmp_path, dest_path)
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP error downloading {url}: {e}")
+    except Exception:
+        # Clean up temp file on any error
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+        raise
+
+
+def _ensure_resources():
+    """Ensure NLTK resources (stopwords) are available and set `stop_words`.
+
+    This is lazy and resilient: if stopwords cannot be loaded, we fall back to a small built-in list.
+    """
+    global stop_words
+    if stop_words:
+        return
+    try:
+        # Attempt to load bundled or system stopwords
+        stop_words = set(stopwords.words('english'))
+        return
+    except LookupError:
+        # Try to download quietly (might fail in locked-down envs)
+        try:
+            nltk.download('stopwords', quiet=True)
+            stop_words = set(stopwords.words('english'))
+            return
+        except Exception:
+            # Fallback small list (keeps preprocessing running)
+            stop_words = set(['the', 'and', 'is', 'in', 'to', 'of', 'a', 'an', 'for', 'on', 'with', 'as', 'by', 'at', 'from', 'that', 'this', 'it'])
 
 def preprocess_text(text):
     if not text:
