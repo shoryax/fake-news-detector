@@ -30,6 +30,31 @@ _model_lock = threading.Lock()
 # stop_words is initialized lazily in _ensure_resources()
 stop_words = None
 
+# --- Diagnostic logging ---
+import logging
+logger = logging.getLogger('fake-news-detector')
+if not logger.handlers:
+    h = logging.StreamHandler()
+    h.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+    logger.addHandler(h)
+logger.setLevel(logging.INFO)
+
+def _log_deployment_state():
+    try:
+        vec_exists = os.path.exists(VECTORIZER_PATH)
+        model_exists = os.path.exists(MODEL_PATH)
+        vec_size = os.path.getsize(VECTORIZER_PATH) if vec_exists else None
+        model_size = os.path.getsize(MODEL_PATH) if model_exists else None
+    except Exception:
+        vec_exists = model_exists = False
+        vec_size = model_size = None
+    env_vec = bool(os.environ.get('VECTORIZER_URL') or os.environ.get('VEC_URL') or os.environ.get('VECTORIZER'))
+    env_model = bool(os.environ.get('MODEL_URL') or os.environ.get('MODEL'))
+    logger.info(f"Vercel diagnostic: vectorizer_exists={vec_exists} size={vec_size} model_exists={model_exists} size={model_size} env_vec={env_vec} env_model={env_model}")
+
+# Log an initial deployment state at import time (Vercel will show this in build/runtime logs)
+_log_deployment_state()
+
 
 def _ensure_model_loaded():
     """Load the vectorizer and model on first use."""
@@ -120,6 +145,32 @@ def _ensure_resources():
         except Exception:
             # Fallback small list (keeps preprocessing running)
             stop_words = set(['the', 'and', 'is', 'in', 'to', 'of', 'a', 'an', 'for', 'on', 'with', 'as', 'by', 'at', 'from', 'that', 'this', 'it'])
+
+
+    @app.route('/__diag', methods=['GET'])
+    def diag():
+        """Return simple diagnostic info useful for Vercel logs.
+
+        - Whether model files exist and sizes
+        - Whether MODEL_URL/VECTORIZER_URL are provided
+        """
+        try:
+            vec_exists = os.path.exists(VECTORIZER_PATH)
+            model_exists = os.path.exists(MODEL_PATH)
+            vec_size = os.path.getsize(VECTORIZER_PATH) if vec_exists else None
+            model_size = os.path.getsize(MODEL_PATH) if model_exists else None
+        except Exception as e:
+            return jsonify({'error': f'Filesystem error: {e}'}), 500
+        env_vec = bool(os.environ.get('VECTORIZER_URL') or os.environ.get('VEC_URL') or os.environ.get('VECTORIZER'))
+        env_model = bool(os.environ.get('MODEL_URL') or os.environ.get('MODEL'))
+        return jsonify({
+            'vectorizer_exists': vec_exists,
+            'vectorizer_size': vec_size,
+            'model_exists': model_exists,
+            'model_size': model_size,
+            'env_var_vectorizer_present': env_vec,
+            'env_var_model_present': env_model
+        })
 
 def preprocess_text(text):
     if not text:
