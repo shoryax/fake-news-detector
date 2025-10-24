@@ -16,3 +16,4 @@ model/
 
 # IDE
 .vscode/
+.vercel

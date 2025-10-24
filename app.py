@@ -19,8 +19,8 @@ if os.path.isdir(NLTK_DATA_DIR):
 app = Flask(__name__)
 
 # Paths inside the deployment (relative to project root)
-MODEL_PATH = 'model/logistic_model.pkl'
-VECTORIZER_PATH = 'model/tfidf_vectorizer.pkl'
+MODEL_PATH = 'https://blissstorage12345.blob.core.windows.net/pickles/logistic_model.pkl?se=2025-11-22T19%3A49Z&sp=r&sv=2022-11-02&sr=b&sig=0vZXLvsH5%2BalFYwLcGZHZQ6ZBenuld9wnjL%2B9VXhUoY%3D'
+VECTORIZER_PATH = 'https://blissstorage12345.blob.core.windows.net/pickles/tfidf_vectorizer.pkl?se=2025-11-22T19%3A49Z&sp=r&sv=2022-11-02&sr=b&sig=Khb%2FPuU6Kxl%2BDgILQg89QPxJP6%2F1a2QOL%2BFJBPmy2XQ%3D'
 
 # lazy-loaded model/vectorizer (helps serverless deployments)
 model = None
