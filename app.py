@@ -18,9 +18,11 @@ if os.path.isdir(NLTK_DATA_DIR):
 
 app = Flask(__name__)
 
-# Paths inside the deployment (relative to project root)
-MODEL_PATH = 'https://blissstorage12345.blob.core.windows.net/pickles/logistic_model.pkl?se=2025-11-22T19%3A49Z&sp=r&sv=2022-11-02&sr=b&sig=0vZXLvsH5%2BalFYwLcGZHZQ6ZBenuld9wnjL%2B9VXhUoY%3D'
-VECTORIZER_PATH = 'https://blissstorage12345.blob.core.windows.net/pickles/tfidf_vectorizer.pkl?se=2025-11-22T19%3A49Z&sp=r&sv=2022-11-02&sr=b&sig=Khb%2FPuU6Kxl%2BDgILQg89QPxJP6%2F1a2QOL%2BFJBPmy2XQ%3D'
+# Writable location for serverless (Vercel functions can write to /tmp)
+ARTIFACT_DIR = os.environ.get('MODEL_DIR', '/tmp/model')
+# Local paths where artifacts will be stored/loaded
+MODEL_PATH = os.path.join(ARTIFACT_DIR, 'logistic_model.pkl')
+VECTORIZER_PATH = os.path.join(ARTIFACT_DIR, 'tfidf_vectorizer.pkl')
 
 # lazy-loaded model/vectorizer (helps serverless deployments)
 model = None
@@ -146,31 +148,30 @@ def _ensure_resources():
             # Fallback small list (keeps preprocessing running)
             stop_words = set(['the', 'and', 'is', 'in', 'to', 'of', 'a', 'an', 'for', 'on', 'with', 'as', 'by', 'at', 'from', 'that', 'this', 'it'])
 
+@app.route('/__diag', methods=['GET'])
+def diag():
+    """Return simple diagnostic info useful for Vercel logs.
 
-    @app.route('/__diag', methods=['GET'])
-    def diag():
-        """Return simple diagnostic info useful for Vercel logs.
-
-        - Whether model files exist and sizes
-        - Whether MODEL_URL/VECTORIZER_URL are provided
-        """
-        try:
-            vec_exists = os.path.exists(VECTORIZER_PATH)
-            model_exists = os.path.exists(MODEL_PATH)
-            vec_size = os.path.getsize(VECTORIZER_PATH) if vec_exists else None
-            model_size = os.path.getsize(MODEL_PATH) if model_exists else None
-        except Exception as e:
-            return jsonify({'error': f'Filesystem error: {e}'}), 500
-        env_vec = bool(os.environ.get('VECTORIZER_URL') or os.environ.get('VEC_URL') or os.environ.get('VECTORIZER'))
-        env_model = bool(os.environ.get('MODEL_URL') or os.environ.get('MODEL'))
-        return jsonify({
-            'vectorizer_exists': vec_exists,
-            'vectorizer_size': vec_size,
-            'model_exists': model_exists,
-            'model_size': model_size,
-            'env_var_vectorizer_present': env_vec,
-            'env_var_model_present': env_model
-        })
+    - Whether model files exist and sizes
+    - Whether MODEL_URL/VECTORIZER_URL are provided
+    """
+    try:
+        vec_exists = os.path.exists(VECTORIZER_PATH)
+        model_exists = os.path.exists(MODEL_PATH)
+        vec_size = os.path.getsize(VECTORIZER_PATH) if vec_exists else None
+        model_size = os.path.getsize(MODEL_PATH) if model_exists else None
+    except Exception as e:
+        return jsonify({'error': f'Filesystem error: {e}'}), 500
+    env_vec = bool(os.environ.get('VECTORIZER_URL') or os.environ.get('VEC_URL') or os.environ.get('VECTORIZER'))
+    env_model = bool(os.environ.get('MODEL_URL') or os.environ.get('MODEL'))
+    return jsonify({
+        'vectorizer_exists': vec_exists,
+        'vectorizer_size': vec_size,
+        'model_exists': model_exists,
+        'model_size': model_size,
+        'env_var_vectorizer_present': env_vec,
+        'env_var_model_present': env_model
+    })
 
 def preprocess_text(text):
     if not text:
