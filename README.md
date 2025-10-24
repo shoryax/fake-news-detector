@@ -1,7 +1,3 @@
-Sure — here’s a clean, professional, and well-structured **`README.md`** that merges all your deployment notes, adds clarity, and makes it look like a polished open-source project ready for GitHub.
-
----
-
 # 📰 Fake News Detector
 
 A **machine learning-powered Flask web app** that classifies news articles as *real* or *fake* using a **Logistic Regression** model and **TF-IDF vectorization**.
