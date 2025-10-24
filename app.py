@@ -18,11 +18,16 @@ if os.path.isdir(NLTK_DATA_DIR):
 
 app = Flask(__name__)
 
-# Writable location for serverless (Vercel functions can write to /tmp)
-ARTIFACT_DIR = os.environ.get('MODEL_DIR', '/tmp/model')
-# Local paths where artifacts will be stored/loaded
-MODEL_PATH = os.path.join(ARTIFACT_DIR, 'logistic_model.pkl')
-VECTORIZER_PATH = os.path.join(ARTIFACT_DIR, 'tfidf_vectorizer.pkl')
+# Model artifact locations
+# - Local repo paths (useful for local dev or if artifacts are checked into the repo)
+LOCAL_MODEL_DIR = os.path.join(HERE, 'model')
+LOCAL_MODEL_PATH = os.path.join(LOCAL_MODEL_DIR, 'logistic_model.pkl')
+LOCAL_VECTORIZER_PATH = os.path.join(LOCAL_MODEL_DIR, 'tfidf_vectorizer.pkl')
+
+# - Writable runtime directory for serverless (Vercel): use /tmp
+RUNTIME_MODEL_DIR = os.environ.get('MODEL_DIR', '/tmp/model')
+RUNTIME_MODEL_PATH = os.path.join(RUNTIME_MODEL_DIR, 'logistic_model.pkl')
+RUNTIME_VECTORIZER_PATH = os.path.join(RUNTIME_MODEL_DIR, 'tfidf_vectorizer.pkl')
 
 # lazy-loaded model/vectorizer (helps serverless deployments)
 model = None
@@ -43,16 +48,21 @@ logger.setLevel(logging.INFO)
 
 def _log_deployment_state():
     try:
-        vec_exists = os.path.exists(VECTORIZER_PATH)
-        model_exists = os.path.exists(MODEL_PATH)
-        vec_size = os.path.getsize(VECTORIZER_PATH) if vec_exists else None
-        model_size = os.path.getsize(MODEL_PATH) if model_exists else None
+        local_vec = os.path.exists(LOCAL_VECTORIZER_PATH)
+        local_model = os.path.exists(LOCAL_MODEL_PATH)
+        runtime_vec = os.path.exists(RUNTIME_VECTORIZER_PATH)
+        runtime_model = os.path.exists(RUNTIME_MODEL_PATH)
+        vec_size = (os.path.getsize(LOCAL_VECTORIZER_PATH) if local_vec else (os.path.getsize(RUNTIME_VECTORIZER_PATH) if runtime_vec else None))
+        model_size = (os.path.getsize(LOCAL_MODEL_PATH) if local_model else (os.path.getsize(RUNTIME_MODEL_PATH) if runtime_model else None))
     except Exception:
-        vec_exists = model_exists = False
+        local_vec = local_model = runtime_vec = runtime_model = False
         vec_size = model_size = None
     env_vec = bool(os.environ.get('VECTORIZER_URL') or os.environ.get('VEC_URL') or os.environ.get('VECTORIZER'))
     env_model = bool(os.environ.get('MODEL_URL') or os.environ.get('MODEL'))
-    logger.info(f"Vercel diagnostic: vectorizer_exists={vec_exists} size={vec_size} model_exists={model_exists} size={model_size} env_vec={env_vec} env_model={env_model}")
+    logger.info(
+        "Startup diag: local_vec=%s local_model=%s runtime_vec=%s runtime_model=%s size_vec=%s size_model=%s env_vec=%s env_model=%s",
+        local_vec, local_model, runtime_vec, runtime_model, vec_size, model_size, env_vec, env_model
+    )
 
 # Log an initial deployment state at import time (Vercel will show this in build/runtime logs)
 _log_deployment_state()
@@ -69,28 +79,32 @@ def _ensure_model_loaded():
 
     with _model_lock:
         if model is None or vectorizer is None:
-            # If local pickles are missing, try to download from URLs provided via env vars.
-            if not os.path.exists(VECTORIZER_PATH) or not os.path.exists(MODEL_PATH):
+            # Prefer local repo artifacts if present; otherwise download to /tmp from env URLs
+            if os.path.exists(LOCAL_VECTORIZER_PATH) and os.path.exists(LOCAL_MODEL_PATH):
+                vec_path = LOCAL_VECTORIZER_PATH
+                mdl_path = LOCAL_MODEL_PATH
+            else:
                 vec_url = os.environ.get('VECTORIZER_URL') or os.environ.get('VEC_URL') or os.environ.get('VECTORIZER')
                 model_url = os.environ.get('MODEL_URL') or os.environ.get('MODEL')
-                if vec_url and model_url:
-                    os.makedirs(os.path.dirname(VECTORIZER_PATH), exist_ok=True)
-                    try:
-                        _download_file(vec_url, VECTORIZER_PATH)
-                        _download_file(model_url, MODEL_PATH)
-                    except Exception as e:
-                        raise RuntimeError(f"Failed to download model artifacts: {e}")
-                else:
+                if not (vec_url and model_url):
                     raise FileNotFoundError("Model files not found. Provide MODEL_URL and VECTORIZER_URL environment variables or include model pickles in the deployment.")
+                os.makedirs(RUNTIME_MODEL_DIR, exist_ok=True)
+                try:
+                    _download_file(vec_url, RUNTIME_VECTORIZER_PATH)
+                    _download_file(model_url, RUNTIME_MODEL_PATH)
+                except Exception as e:
+                    raise RuntimeError(f"Failed to download model artifacts: {e}")
+                vec_path = RUNTIME_VECTORIZER_PATH
+                mdl_path = RUNTIME_MODEL_PATH
 
-            # Load the pickles
+            # Load
             try:
-                with open(VECTORIZER_PATH, 'rb') as f:
+                with open(vec_path, 'rb') as f:
                     vectorizer = pickle.load(f)
             except Exception as e:
                 raise RuntimeError(f"Failed to load vectorizer pickle: {e}")
             try:
-                with open(MODEL_PATH, 'rb') as f:
+                with open(mdl_path, 'rb') as f:
                     model = pickle.load(f)
             except Exception as e:
                 raise RuntimeError(f"Failed to load model pickle: {e}")
@@ -148,26 +162,29 @@ def _ensure_resources():
             # Fallback small list (keeps preprocessing running)
             stop_words = set(['the', 'and', 'is', 'in', 'to', 'of', 'a', 'an', 'for', 'on', 'with', 'as', 'by', 'at', 'from', 'that', 'this', 'it'])
 
+
 @app.route('/__diag', methods=['GET'])
 def diag():
-    """Return simple diagnostic info useful for Vercel logs.
-
-    - Whether model files exist and sizes
-    - Whether MODEL_URL/VECTORIZER_URL are provided
-    """
+    """Return simple diagnostic info for deployment debugging."""
     try:
-        vec_exists = os.path.exists(VECTORIZER_PATH)
-        model_exists = os.path.exists(MODEL_PATH)
-        vec_size = os.path.getsize(VECTORIZER_PATH) if vec_exists else None
-        model_size = os.path.getsize(MODEL_PATH) if model_exists else None
+        local = {
+            'vectorizer_exists': os.path.exists(LOCAL_VECTORIZER_PATH),
+            'model_exists': os.path.exists(LOCAL_MODEL_PATH),
+        }
+        runtime = {
+            'vectorizer_exists': os.path.exists(RUNTIME_VECTORIZER_PATH),
+            'model_exists': os.path.exists(RUNTIME_MODEL_PATH),
+        }
+        vec_size = (os.path.getsize(LOCAL_VECTORIZER_PATH) if local['vectorizer_exists'] else (os.path.getsize(RUNTIME_VECTORIZER_PATH) if runtime['vectorizer_exists'] else None))
+        model_size = (os.path.getsize(LOCAL_MODEL_PATH) if local['model_exists'] else (os.path.getsize(RUNTIME_MODEL_PATH) if runtime['model_exists'] else None))
     except Exception as e:
         return jsonify({'error': f'Filesystem error: {e}'}), 500
     env_vec = bool(os.environ.get('VECTORIZER_URL') or os.environ.get('VEC_URL') or os.environ.get('VECTORIZER'))
     env_model = bool(os.environ.get('MODEL_URL') or os.environ.get('MODEL'))
     return jsonify({
-        'vectorizer_exists': vec_exists,
+        'local': local,
+        'runtime': runtime,
         'vectorizer_size': vec_size,
-        'model_exists': model_exists,
         'model_size': model_size,
         'env_var_vectorizer_present': env_vec,
         'env_var_model_present': env_model
