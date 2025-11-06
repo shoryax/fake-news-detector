@@ -1,41 +1,24 @@
 from flask import Flask, request, jsonify, render_template
-import pickle
-import re
 import os
-import tempfile
-import urllib.request
-import urllib.error
-import threading
-import nltk
-from nltk.corpus import stopwords
+from openai import OpenAI
+from dotenv import load_dotenv
+import json
 
-# If this repo bundles NLTK data (nltk_data/), make sure NLTK finds it.
+# Load environment variables
+load_dotenv()
+
 HERE = os.path.dirname(__file__)
-NLTK_DATA_DIR = os.path.join(HERE, 'nltk_data')
-if os.path.isdir(NLTK_DATA_DIR):
-    import nltk.data
-    nltk.data.path.append(NLTK_DATA_DIR)
-
 app = Flask(__name__)
 
-# Model artifact locations
-# - Local repo paths (useful for local dev or if artifacts are checked into the repo)
-LOCAL_MODEL_DIR = os.path.join(HERE, 'model')
-LOCAL_MODEL_PATH = os.path.join(LOCAL_MODEL_DIR, 'logistic_model.pkl')
-LOCAL_VECTORIZER_PATH = os.path.join(LOCAL_MODEL_DIR, 'tfidf_vectorizer.pkl')
+# Initialize OpenAI client
+openai_api_key = os.environ.get('OPENAI_API_KEY')
+if not openai_api_key:
+    raise ValueError("OPENAI_API_KEY environment variable is not set")
 
-# - Writable runtime directory for serverless (Vercel): use /tmp
-RUNTIME_MODEL_DIR = os.environ.get('MODEL_DIR', '/tmp/model')
-RUNTIME_MODEL_PATH = os.path.join(RUNTIME_MODEL_DIR, 'logistic_model.pkl')
-RUNTIME_VECTORIZER_PATH = os.path.join(RUNTIME_MODEL_DIR, 'tfidf_vectorizer.pkl')
+client = OpenAI(api_key=openai_api_key)
 
-# lazy-loaded model/vectorizer (helps serverless deployments)
-model = None
-vectorizer = None
-_model_lock = threading.Lock()
-
-# stop_words is initialized lazily in _ensure_resources()
-stop_words = None
+# Configure OpenAI model (default to gpt-4o-mini for cost efficiency)
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
 
 # --- Diagnostic logging ---
 import logging
@@ -46,163 +29,73 @@ if not logger.handlers:
     logger.addHandler(h)
 logger.setLevel(logging.INFO)
 
-def _log_deployment_state():
-    try:
-        local_vec = os.path.exists(LOCAL_VECTORIZER_PATH)
-        local_model = os.path.exists(LOCAL_MODEL_PATH)
-        runtime_vec = os.path.exists(RUNTIME_VECTORIZER_PATH)
-        runtime_model = os.path.exists(RUNTIME_MODEL_PATH)
-        vec_size = (os.path.getsize(LOCAL_VECTORIZER_PATH) if local_vec else (os.path.getsize(RUNTIME_VECTORIZER_PATH) if runtime_vec else None))
-        model_size = (os.path.getsize(LOCAL_MODEL_PATH) if local_model else (os.path.getsize(RUNTIME_MODEL_PATH) if runtime_model else None))
-    except Exception:
-        local_vec = local_model = runtime_vec = runtime_model = False
-        vec_size = model_size = None
-    env_vec = bool(os.environ.get('VECTORIZER_URL') or os.environ.get('VEC_URL') or os.environ.get('VECTORIZER'))
-    env_model = bool(os.environ.get('MODEL_URL') or os.environ.get('MODEL'))
-    logger.info(
-        "Startup diag: local_vec=%s local_model=%s runtime_vec=%s runtime_model=%s size_vec=%s size_model=%s env_vec=%s env_model=%s",
-        local_vec, local_model, runtime_vec, runtime_model, vec_size, model_size, env_vec, env_model
-    )
+logger.info("OpenAI API integration initialized with model: %s", OPENAI_MODEL)
 
-# Log an initial deployment state at import time (Vercel will show this in build/runtime logs)
-_log_deployment_state()
-
-
-def _ensure_model_loaded():
-    """Load the vectorizer and model on first use."""
-    global model, vectorizer, _model_lock
-    if model is not None and vectorizer is not None:
-        return
-
-    # Ensure NLTK resources and make best-effort to fetch missing model files
-    _ensure_resources()
-
-    with _model_lock:
-        if model is None or vectorizer is None:
-            # Prefer local repo artifacts if present; otherwise download to /tmp from env URLs
-            if os.path.exists(LOCAL_VECTORIZER_PATH) and os.path.exists(LOCAL_MODEL_PATH):
-                vec_path = LOCAL_VECTORIZER_PATH
-                mdl_path = LOCAL_MODEL_PATH
-            else:
-                vec_url = os.environ.get('VECTORIZER_URL') or os.environ.get('VEC_URL') or os.environ.get('VECTORIZER')
-                model_url = os.environ.get('MODEL_URL') or os.environ.get('MODEL')
-                if not (vec_url and model_url):
-                    raise FileNotFoundError("Model files not found. Provide MODEL_URL and VECTORIZER_URL environment variables or include model pickles in the deployment.")
-                os.makedirs(RUNTIME_MODEL_DIR, exist_ok=True)
-                try:
-                    _download_file(vec_url, RUNTIME_VECTORIZER_PATH)
-                    _download_file(model_url, RUNTIME_MODEL_PATH)
-                except Exception as e:
-                    raise RuntimeError(f"Failed to download model artifacts: {e}")
-                vec_path = RUNTIME_VECTORIZER_PATH
-                mdl_path = RUNTIME_MODEL_PATH
-
-            # Load
-            try:
-                with open(vec_path, 'rb') as f:
-                    vectorizer = pickle.load(f)
-            except Exception as e:
-                raise RuntimeError(f"Failed to load vectorizer pickle: {e}")
-            try:
-                with open(mdl_path, 'rb') as f:
-                    model = pickle.load(f)
-            except Exception as e:
-                raise RuntimeError(f"Failed to load model pickle: {e}")
-
-
-def _download_file(url, dest_path, timeout=20):
-    """Download a file from `url` to `dest_path` (atomic write).
-
-    Uses urllib.request (safe in restricted environments). Raises on non-200.
+def analyze_news_with_openai(text):
     """
-    # Write to a temporary file first
-    dest_dir = os.path.dirname(dest_path)
-    os.makedirs(dest_dir, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=dest_dir)
-    os.close(fd)
+    Analyze news text using OpenAI API to determine if it's fake or real.
+    Also performs fact-checking to verify claims.
+    """
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'python-urllib/3'})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"Download failed with status {resp.status} for {url}")
-            data = resp.read()
-        with open(tmp_path, 'wb') as out:
-            out.write(data)
-        os.replace(tmp_path, dest_path)
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"HTTP error downloading {url}: {e}")
-    except Exception:
-        # Clean up temp file on any error
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
+        # System prompt that instructs the AI to act as a fact-checker
+        system_prompt = """You are an expert fact-checker and news analyst. Your job is to:
+1. Analyze the given news text for credibility
+2. Identify specific claims that can be fact-checked
+3. Assess the likelihood of the news being real or fake based on:
+   - Language patterns (sensationalism, emotional manipulation, clickbait)
+   - Logical consistency
+   - Presence of verifiable facts vs unsubstantiated claims
+   - Common fake news characteristics
+
+Respond in JSON format with the following structure:
+{
+    "prediction": "Real" or "Fake",
+    "confidence": 0.0 to 1.0,
+    "reasoning": "Brief explanation of your assessment",
+    "claims_identified": ["list of key claims found in the text"],
+    "red_flags": ["list of suspicious elements if any"],
+    "fact_check_summary": "Summary of fact-checking analysis"
+}"""
+
+        # Call OpenAI API
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Analyze this news text:\n\n{text}"}
+            ],
+            temperature=0.3,  # Lower temperature for more consistent, factual responses
+            response_format={"type": "json_object"}
+        )
+        
+        # Parse the response
+        result = json.loads(response.choices[0].message.content)
+        logger.info("OpenAI analysis completed: %s", result.get('prediction'))
+        
+        return result
+        
+    except json.JSONDecodeError as e:
+        logger.error("Failed to parse OpenAI response as JSON: %s", e)
+        raise ValueError("Invalid response format from OpenAI")
+    except Exception as e:
+        logger.error("OpenAI API error: %s", e)
         raise
-
-
-def _ensure_resources():
-    """Ensure NLTK resources (stopwords) are available and set `stop_words`.
-
-    This is lazy and resilient: if stopwords cannot be loaded, we fall back to a small built-in list.
-    """
-    global stop_words
-    if stop_words:
-        return
-    try:
-        # Attempt to load bundled or system stopwords
-        stop_words = set(stopwords.words('english'))
-        return
-    except LookupError:
-        # Try to download quietly (might fail in locked-down envs)
-        try:
-            nltk.download('stopwords', quiet=True)
-            stop_words = set(stopwords.words('english'))
-            return
-        except Exception:
-            # Fallback small list (keeps preprocessing running)
-            stop_words = set(['the', 'and', 'is', 'in', 'to', 'of', 'a', 'an', 'for', 'on', 'with', 'as', 'by', 'at', 'from', 'that', 'this', 'it'])
 
 
 @app.route('/__diag', methods=['GET'])
 def diag():
     """Return simple diagnostic info for deployment debugging."""
-    try:
-        local = {
-            'vectorizer_exists': os.path.exists(LOCAL_VECTORIZER_PATH),
-            'model_exists': os.path.exists(LOCAL_MODEL_PATH),
-        }
-        runtime = {
-            'vectorizer_exists': os.path.exists(RUNTIME_VECTORIZER_PATH),
-            'model_exists': os.path.exists(RUNTIME_MODEL_PATH),
-        }
-        vec_size = (os.path.getsize(LOCAL_VECTORIZER_PATH) if local['vectorizer_exists'] else (os.path.getsize(RUNTIME_VECTORIZER_PATH) if runtime['vectorizer_exists'] else None))
-        model_size = (os.path.getsize(LOCAL_MODEL_PATH) if local['model_exists'] else (os.path.getsize(RUNTIME_MODEL_PATH) if runtime['model_exists'] else None))
-    except Exception as e:
-        return jsonify({'error': f'Filesystem error: {e}'}), 500
-    env_vec = bool(os.environ.get('VECTORIZER_URL') or os.environ.get('VEC_URL') or os.environ.get('VECTORIZER'))
-    env_model = bool(os.environ.get('MODEL_URL') or os.environ.get('MODEL'))
     return jsonify({
-        'local': local,
-        'runtime': runtime,
-        'vectorizer_size': vec_size,
-        'model_size': model_size,
-        'env_var_vectorizer_present': env_vec,
-        'env_var_model_present': env_model
+        'status': 'ok',
+        'openai_model': OPENAI_MODEL,
+        'api_key_configured': bool(openai_api_key)
     })
 
-def preprocess_text(text):
-    if not text:
-        return ""
-    text = str(text).lower()
-    # Keep alphanumeric characters and basic punctuation
-    text = re.sub(r'[^a-zA-Z0-9\s.,\'-]', '', text)
-    # Remove stopwords but keep numbers
-    text = ' '.join([word for word in text.split() if word not in stop_words])
-    return text
 
 @app.route('/', methods=['GET'])
 def home():
     return render_template('index.html')
+
 
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -212,20 +105,22 @@ def predict():
         if not text:
             return jsonify({'error': 'No text provided'}), 400
 
-        # Ensure model/vectorizer are loaded (lazy for serverless)
-        _ensure_model_loaded()
-        processed = preprocess_text(text)
-        features = vectorizer.transform([processed])
-        prediction = model.predict(features)[0]
-        confidence = model.predict_proba(features)[0][prediction]
+        if len(text.strip()) < 10:
+            return jsonify({'error': 'Text is too short for analysis (minimum 10 characters)'}), 400
 
-        result = 'Fake' if prediction == 0 else 'Real'
+        # Analyze with OpenAI
+        analysis = analyze_news_with_openai(text)
+        
         return jsonify({
-            'prediction': result,
-            'confidence': f"{float(confidence):.4f}",
-            'processed_text': processed[:200] + '...' if len(processed) > 200 else processed  # Optional preview
+            'prediction': analysis.get('prediction', 'Unknown'),
+            'confidence': f"{float(analysis.get('confidence', 0)):.4f}",
+            'reasoning': analysis.get('reasoning', ''),
+            'claims_identified': analysis.get('claims_identified', []),
+            'red_flags': analysis.get('red_flags', []),
+            'fact_check_summary': analysis.get('fact_check_summary', '')
         })
     except Exception as e:
+        logger.error("Prediction error: %s", e)
         return jsonify({'error': str(e)}), 500
 
 # For Vercel serverless deployment
