@@ -13,12 +13,17 @@ app = Flask(__name__)
 # Initialize OpenAI client
 openai_api_key = os.environ.get('OPENAI_API_KEY')
 if not openai_api_key:
-    raise ValueError("OPENAI_API_KEY environment variable is not set")
+    raise ValueError(
+        "OPENAI_API_KEY environment variable is not set. "
+        "Get your API key at https://platform.openai.com/api-keys and set it as an environment variable."
+    )
 
 client = OpenAI(api_key=openai_api_key)
 
 # Configure OpenAI model (default to gpt-4o-mini for cost efficiency)
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
+# Configure analysis temperature (default to 0.3 for more consistent, factual responses)
+OPENAI_TEMPERATURE = float(os.environ.get('OPENAI_TEMPERATURE', '0.3'))
 
 # --- Diagnostic logging ---
 import logging
@@ -64,7 +69,7 @@ Respond in JSON format with the following structure:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Analyze this news text:\n\n{text}"}
             ],
-            temperature=0.3,  # Lower temperature for more consistent, factual responses
+            temperature=OPENAI_TEMPERATURE,
             response_format={"type": "json_object"}
         )
         
@@ -105,8 +110,8 @@ def predict():
         if not text:
             return jsonify({'error': 'No text provided'}), 400
 
-        if len(text.strip()) < 10:
-            return jsonify({'error': 'Text is too short for analysis (minimum 10 characters)'}), 400
+        if len(text.strip()) < 5:
+            return jsonify({'error': 'Text is too short for analysis (minimum 5 characters)'}), 400
 
         # Analyze with OpenAI
         analysis = analyze_news_with_openai(text)

@@ -165,7 +165,7 @@ python scripts/smoke_test.py https://your-vercel-app.vercel.app
 | **Python**   | Core programming language                  |
 | **Flask**    | Web framework for serving predictions      |
 | **OpenAI**   | AI-powered fact-checking and analysis      |
-| **GPT-4o-mini** | Default language model (fast & cost-effective) |
+| **gpt-4o-mini** | Default language model (fast & cost-effective) |
 | **Vercel**   | Cloud platform for deployment              |
 | **Azure VM** | Underlying compute for runtime             |
 
