@@ -1,8 +1,3 @@
 Flask==2.3.0
-scikit-learn==1.3.0
-nltk==3.8.1
-gunicorn==21.2.0
-cohere
+cohere==4.37
 python-dotenv==1.0.0
-
-# If you keep large model artifacts locally, don't commit them to the repo (add model/ to .gitignore)
