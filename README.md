@@ -1,7 +1,7 @@
-# 📰 Fake News Detector
+# 📰 Fake News Detector (Cohere Edition)
 
-An **AI-powered Flask web app** that classifies news articles as *real* or *fake* using **OpenAI's GPT models** with advanced fact-checking capabilities.
-Built with **Python, OpenAI API, and Flask**, and designed for deployment on **Vercel** for scalability and low-latency inference.
+An **AI-powered Flask web app** that classifies news articles as *real* or *fake* using **Cohere's AI models** with advanced fact-checking capabilities.
+Built with **Python, Cohere API, and Flask**, and designed for deployment on **Vercel** for scalability and low-latency inference.
 
 ---
 
@@ -9,7 +9,7 @@ Built with **Python, OpenAI API, and Flask**, and designed for deployment on **V
 
 This project demonstrates an **AI-powered fact-checking and news analysis pipeline**:
 
-* Analyze news text using **OpenAI's GPT models** (default: gpt-4o-mini)
+* Analyze news text using **Cohere’s language models** (default: `command-r-plus` or your preferred model)
 * Perform **intelligent fact-checking** to identify claims and verify credibility
 * Assess articles based on language patterns, logical consistency, and fake news characteristics
 * Serve predictions through a **Flask API**
@@ -21,12 +21,13 @@ This application uses state-of-the-art language models for comprehensive news an
 ## ⚙️ How It Works
 
 1. **User sends text** to the `/predict` endpoint.
-2. **OpenAI API** analyzes the text using a specialized fact-checking prompt.
+2. **Cohere API** analyzes the text using a specialized fact-checking prompt.
 3. The **AI model** evaluates credibility based on:
-   - Language patterns (sensationalism, emotional manipulation)
-   - Logical consistency
-   - Verifiable facts vs unsubstantiated claims
-   - Common fake news characteristics
+
+   * Language patterns (sensationalism, emotional manipulation)
+   * Logical consistency
+   * Verifiable facts vs unsubstantiated claims
+   * Common fake news characteristics
 4. Flask returns a detailed JSON response with prediction, confidence, reasoning, identified claims, and fact-check summary.
 
 ---
@@ -39,19 +40,26 @@ This application is deployed on **Vercel**, running on **Azure Virtual Machine i
 
 You must set the following environment variable in your Vercel project settings:
 
-* `OPENAI_API_KEY` - Your OpenAI API key (get one at https://platform.openai.com/api-keys)
+* `COHERE_API_KEY` — Your Cohere API key (get one at [https://dashboard.cohere.com/api-keys](https://dashboard.cohere.com/api-keys))
 
 Optional environment variables:
 
-* `OPENAI_MODEL` - Model to use (default: `gpt-4o-mini`)
+* `COHERE_MODEL` — Model to use (default: `command-r-plus`)
+
+---
 
 ### Setting Environment Variables in Vercel
 
 1. Go to your Vercel project dashboard
-2. Navigate to Settings → Environment Variables
-3. Add `OPENAI_API_KEY` with your API key
-4. Optionally add `OPENAI_MODEL` if you want to use a different model
-5. Redeploy your application
+2. Navigate to **Settings → Environment Variables**
+3. Add:
+
+| Key              | Value                 |
+| ---------------- | --------------------- |
+| `COHERE_API_KEY` | Your Cohere API key   |
+| `COHERE_MODEL`   | (optional) model name |
+
+4. Redeploy your application
 
 ---
 
@@ -76,62 +84,67 @@ The `/predict` endpoint returns a detailed analysis:
 
 ### Prerequisites
 
-1. **Get an OpenAI API key** from https://platform.openai.com/api-keys
+1. **Get a Cohere API key** from [https://dashboard.cohere.com/api-keys](https://dashboard.cohere.com/api-keys)
 2. **Clone this repository**
-3. **Set up environment variables**
+3. **Set environment variables**
+
+---
 
 ### Local Setup
 
-1. Clone this repository:
+1. Clone the repository:
 
-   ```bash
-   git clone https://github.com/shoryax/fake-news-detector.git
-   cd fake-news-detector
-   ```
+```bash
+git clone https://github.com/shoryax/fake-news-detector.git
+cd fake-news-detector
+```
 
 2. Create a `.env` file (use `.env.example` as template):
 
-   ```bash
-   cp .env.example .env
-   # Edit .env and add your OPENAI_API_KEY
-   ```
+```bash
+cp .env.example .env
+# Edit .env and add your COHERE_API_KEY
+```
 
 3. Install dependencies:
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+pip install -r requirements.txt
+```
 
-4. Run the Flask app locally:
+4. Run the Flask app:
 
-   ```bash
-   flask run
-   # or
-   python app.py
-   ```
+```bash
+flask run
+# or
+python app.py
+```
 
-5. Send a test request:
+5. Test the endpoint:
 
-   ```bash
-   curl -X POST http://127.0.0.1:5000/predict \
-     -H "Content-Type: application/json" \
-     -d '{"text": "Sample headline for prediction."}'
-   ```
+```bash
+curl -X POST http://127.0.0.1:5000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Sample headline for prediction."}'
+```
 
-### Vercel Deployment
+---
+
+## 🚀 Vercel Deployment
 
 1. Fork or clone this repository
-2. Connect your repository to Vercel
-3. In Vercel project settings, add environment variable:
-   - Key: `OPENAI_API_KEY`
-   - Value: Your OpenAI API key
+2. Connect your repository to **Vercel**
+3. Add environment variables:
+
+| Key              | Value               |
+| ---------------- | ------------------- |
+| `COHERE_API_KEY` | Your Cohere API key |
+
 4. Deploy!
 
 ---
 
 ## 🔍 Smoke Test (after deployment)
-
-Once deployed, run a quick sanity check from your local terminal:
 
 ```bash
 curl -X POST https://your-vercel-app.vercel.app/predict \
@@ -139,9 +152,7 @@ curl -X POST https://your-vercel-app.vercel.app/predict \
   -d '{"text": "This is a test news article to classify."}' -v
 ```
 
-You should receive a detailed JSON response with prediction, confidence, reasoning, claims identified, and fact-check summary.
-
-You can also use the provided smoke test script:
+Or use the provided smoke test script:
 
 ```bash
 python scripts/smoke_test.py https://your-vercel-app.vercel.app
@@ -151,23 +162,23 @@ python scripts/smoke_test.py https://your-vercel-app.vercel.app
 
 ## ⚠️ Notes & Best Practices
 
-* **API Key Security**: Never commit your `OPENAI_API_KEY` to the repository. Always use environment variables.
-* **Cost Management**: The default model `gpt-4o-mini` is cost-efficient. Monitor your OpenAI API usage at https://platform.openai.com/usage
-* **Rate Limiting**: Consider implementing rate limiting for production deployments to control costs
-* **Model Selection**: You can change the model by setting the `OPENAI_MODEL` environment variable (e.g., `gpt-4o`, `gpt-3.5-turbo`)
+* **API Key Security** — Never commit `COHERE_API_KEY` to your repository
+* **Cost Management** — Cohere billing dashboard: [https://dashboard.cohere.com](https://dashboard.cohere.com)
+* **Rate Limiting** — Consider rate limiting for production
+* **Model Selection** — Change the model using `COHERE_MODEL` (e.g., `command-r-plus`, `command-light`, etc.)
 
 ---
 
 ## 🧠 Tech Stack
 
-| Component    | Description                                |
-| ------------ | ------------------------------------------ |
-| **Python**   | Core programming language                  |
-| **Flask**    | Web framework for serving predictions      |
-| **OpenAI**   | AI-powered fact-checking and analysis      |
-| **gpt-4o-mini** | Default language model (fast & cost-effective) |
-| **Vercel**   | Cloud platform for deployment              |
-| **Azure VM** | Underlying compute for runtime             |
+| Component          | Description                           |
+| ------------------ | ------------------------------------- |
+| **Python**         | Core programming language             |
+| **Flask**          | Web framework for serving predictions |
+| **Cohere AI**      | AI-powered fact-checking and analysis |
+| **command-r-plus** | Default Cohere model                  |
+| **Vercel**         | Cloud platform for deployment         |
+| **Azure VM**       | Underlying compute for runtime        |
 
 ---
 
@@ -176,7 +187,7 @@ python scripts/smoke_test.py https://your-vercel-app.vercel.app
 ```
 fake-news-detector/
 │
-├── app.py                    # Flask application with OpenAI integration
+├── app.py                    # Flask app with Cohere integration
 ├── requirements.txt          # Dependencies
 ├── .env.example              # Example environment variables
 ├── static/                   # Static assets (CSS, JS)
