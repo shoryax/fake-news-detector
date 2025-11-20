@@ -1,0 +1,15 @@
+[Unit]
+Description=Fake News Detector Flask App
+After=network.target
+
+[Service]
+User=shoryax
+WorkingDirectory=/home/shoryax/news
+# Load environment variables from a file (create /home/shoryax/news/.env and keep it private)
+EnvironmentFile=/home/shoryax/news/.env
+Environment="PATH=/home/shoryax/news/venv/bin"
+# Start Gunicorn; app:app refers to the Flask `app` in app.py which reads COHERE_API_KEY from the environment
+ExecStart=/home/shoryax/news/venv/bin/gunicorn --workers 3 --bind 127.0.0.1:5000 app:app
+
+[Install]
+WantedBy=multi-user.target
